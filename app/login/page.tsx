@@ -1,12 +1,10 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { FormEvent, useState, useEffect } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -14,10 +12,27 @@ export default function LoginPage() {
   const [info, setInfo] = useState<string | null>(null);
   const [resending, setResending] = useState(false);
 
-  const handleSubmit = async (e: FormEvent) => {
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!cancelled && session) {
+        window.location.href = "/dashboard";
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setError(null);
-    setInfo(null);
     setLoading(true);
 
     const { error: signInError } = await supabase.auth.signInWithPassword({
@@ -32,25 +47,24 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/dashboard");
+    window.location.href = "/dashboard";
   };
 
   const handleResendConfirmation = async () => {
     setError(null);
     setInfo(null);
 
-    if (!email) {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
       setError("Please enter your email above first.");
       return;
     }
 
     setResending(true);
-
     const { error: resendError } = await supabase.auth.resend({
       type: "signup",
-      email,
+      email: normalizedEmail,
     });
-
     setResending(false);
 
     if (resendError) {
