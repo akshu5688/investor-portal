@@ -14,12 +14,11 @@ export async function createClient() {
         },
         setAll(cookiesToSet) {
           try {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options);
-            });
-          } catch (error) {
-            // Ignore cookie setting errors in Server Components
-            // Cookies are set via middleware in Next.js
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options)
+            );
+          } catch {
+            // Ignore in Server Components
           }
         },
       },

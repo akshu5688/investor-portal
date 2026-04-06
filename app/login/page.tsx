@@ -1,10 +1,55 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
 
+function getSupabaseSetupWarning(): string | null {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ?? "";
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim() ?? "";
+
+  if (!url || !anonKey) {
+    return "Supabase is not configured. Add NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local, then restart the dev server.";
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    if (parsedUrl.protocol !== "https:") {
+      return "Supabase URL must start with https://. Update NEXT_PUBLIC_SUPABASE_URL in .env.local and restart the dev server.";
+    }
+  } catch {
+    return "Supabase URL is invalid. Update NEXT_PUBLIC_SUPABASE_URL in .env.local and restart the dev server.";
+  }
+
+  // Supabase anon keys are JWTs and should have 3 dot-separated sections.
+  if (anonKey.split(".").length !== 3) {
+    return "Supabase anon key format looks invalid. Update NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local and restart the dev server.";
+  }
+
+  return null;
+}
+
+function normalizeAuthErrorMessage(message: string): string {
+  const normalized = message.toLowerCase();
+
+  if (
+    normalized.includes("failed to fetch") ||
+    normalized.includes("network request failed")
+  ) {
+    return "Cannot reach the login server. Check your internet connection and Supabase URL/key configuration.";
+  }
+
+  if (normalized.includes("invalid login credentials")) {
+    return "Invalid email or password.";
+  }
+
+  return message;
+}
+
 export default function LoginPage() {
+  const router = useRouter();
+  const setupWarning = getSupabaseSetupWarning();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -12,68 +57,72 @@ export default function LoginPage() {
   const [info, setInfo] = useState<string | null>(null);
   const [resending, setResending] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!cancelled && session) {
-        window.location.href = "/dashboard";
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
     setInfo(null);
-    setLoading(true);
 
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
-      password,
-    });
-
-    setLoading(false);
-
-    if (signInError) {
-      setError(signInError.message);
+    if (setupWarning) {
+      setError(setupWarning);
       return;
     }
 
-    window.location.href = "/dashboard";
+    setLoading(true);
+
+    try {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
+      });
+
+      if (signInError) {
+        setError(normalizeAuthErrorMessage(signInError.message));
+        return;
+      }
+
+      router.push("/dashboard");
+    } catch (err) {
+      const fallbackMessage = err instanceof Error ? err.message : "Login failed.";
+      setError(normalizeAuthErrorMessage(fallbackMessage));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleResendConfirmation = async () => {
     setError(null);
     setInfo(null);
 
-    const normalizedEmail = email.trim().toLowerCase();
-    if (!normalizedEmail) {
+    if (setupWarning) {
+      setError(setupWarning);
+      return;
+    }
+
+    if (!email) {
       setError("Please enter your email above first.");
       return;
     }
 
     setResending(true);
-    const { error: resendError } = await supabase.auth.resend({
-      type: "signup",
-      email: normalizedEmail,
-    });
-    setResending(false);
 
-    if (resendError) {
-      setError(resendError.message);
-      return;
+    try {
+      const { error: resendError } = await supabase.auth.resend({
+        type: "signup",
+        email,
+      });
+
+      if (resendError) {
+        setError(normalizeAuthErrorMessage(resendError.message));
+        return;
+      }
+
+      setInfo("Confirmation email sent. Please check your inbox.");
+    } catch (err) {
+      const fallbackMessage = err instanceof Error ? err.message : "Failed to resend confirmation email.";
+      setError(normalizeAuthErrorMessage(fallbackMessage));
+    } finally {
+      setResending(false);
     }
-
-    setInfo("Confirmation email sent. Please check your inbox.");
   };
 
   return (
@@ -126,6 +175,9 @@ export default function LoginPage() {
           {error && (
             <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
           )}
+          {setupWarning && (
+            <p className="text-sm text-amber-600 dark:text-amber-400">{setupWarning}</p>
+          )}
           {info && (
             <p className="text-sm text-emerald-600 dark:text-emerald-400">
               {info}
@@ -134,7 +186,7 @@ export default function LoginPage() {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || Boolean(setupWarning)}
             className="flex w-full items-center justify-center rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
           >
             {loading ? "Logging in..." : "Log in"}
@@ -143,7 +195,7 @@ export default function LoginPage() {
           <button
             type="button"
             onClick={handleResendConfirmation}
-            disabled={resending}
+            disabled={resending || Boolean(setupWarning)}
             className="mt-2 w-full text-center text-xs font-medium text-zinc-600 underline underline-offset-4 hover:text-zinc-800 disabled:cursor-not-allowed disabled:text-zinc-400 dark:text-zinc-400 dark:hover:text-zinc-200"
           >
             {resending ? "Sending confirmation email..." : "Resend confirmation email"}

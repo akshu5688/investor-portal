@@ -29,35 +29,17 @@ export default function AuthCallbackPage() {
         window.history.replaceState({}, document.title, url.pathname + url.search);
       }
 
-      let sessionUserExists = false;
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (session?.user) {
-          sessionUserExists = true;
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
 
       if (!mounted) return;
-      router.replace(sessionUserExists ? next : "/dashboard");
+      router.replace(session ? next : "/login");
     };
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      if (!mounted) return;
-      if (event === "SIGNED_IN" && session) {
-        router.replace(new URL(window.location.href).searchParams.get("next") || "/dashboard");
-      }
-    });
 
     completeAuthFlow();
     return () => {
       mounted = false;
-      subscription.unsubscribe();
     };
   }, [router]);
 

@@ -49,7 +49,6 @@ interface DashboardClientProps {
 
 export default function DashboardClient({ initialUser = null }: DashboardClientProps) {
   const router = useRouter();
-  const hadAuthenticatedUserRef = useRef(Boolean(initialUser));
   const [user, setUser] = useState<User | null>(initialUser);
   const [loading, setLoading] = useState(!initialUser);
   const [activeTab, setActiveTab] = useState("dashboard");
@@ -65,8 +64,6 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
   const [sharing, setSharing] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
-
     const ensureUser = async () => {
       if (initialUser) {
         setUser(initialUser);
@@ -75,73 +72,22 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
         loadActivities();
         return;
       }
-
-      // Retry briefly to handle delayed auth hydration on production.
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        const { data, error } = await supabase.auth.getUser();
-        if (data.user) {
-          if (cancelled) return;
-          hadAuthenticatedUserRef.current = true;
-          setUser(data.user);
-          setLoading(false);
-          loadDocuments(data.user.id);
-          loadActivities();
-          return;
-        }
-
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (session?.user) {
-          if (cancelled) return;
-          hadAuthenticatedUserRef.current = true;
-          setUser(session.user);
-          setLoading(false);
-          loadDocuments(session.user.id);
-          loadActivities();
-          return;
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 300));
-      }
-
-      if (cancelled) return;
-      setLoading(false);
-    };
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      if (cancelled) return;
-      if (event === "SIGNED_IN" && session?.user) {
-        hadAuthenticatedUserRef.current = true;
-        setUser(session.user);
-        setLoading(false);
-        loadDocuments(session.user.id);
-        loadActivities();
-      }
-      if (event === "SIGNED_OUT" && hadAuthenticatedUserRef.current) {
-        hadAuthenticatedUserRef.current = false;
+      const { data, error } = await supabase.auth.getUser();
+      if (error || !data.user) {
         router.replace("/login");
+        return;
       }
-    });
-
-    ensureUser();
-
-    return () => {
-      cancelled = true;
-      subscription.unsubscribe();
+      setUser(data.user);
+      setLoading(false);
+      loadDocuments(data.user.id);
+      loadActivities();
     };
-
-    /*
-      Keep dependency narrow to avoid unnecessary reruns.
-      We intentionally key off stable id when initialUser exists.
-    */
+    ensureUser();
   }, [router, initialUser?.id]);
 
   const loadDocuments = async (userId: string) => {
     const { data, error } = await supabase.storage
-      .from("uploads")
+      .from("documents")
       .list(userId, {
         limit: 100,
         offset: 0,
@@ -187,7 +133,7 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
     setUploading(true);
     const fileName = `${Date.now()}-${file.name}`;
     const filePath = `${user.id}/${fileName}`;
-    const { error } = await supabase.storage.from("uploads").upload(filePath, file);
+    const { error } = await supabase.storage.from("documents").upload(filePath, file);
     setUploading(false);
     if (error) {
       setUploadError(error.message);
@@ -201,7 +147,7 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
 
   const handleDelete = async (path: string) => {
     if (!confirm("Are you sure you want to delete this file?")) return;
-    const { error } = await supabase.storage.from("uploads").remove([path]);
+    const { error } = await supabase.storage.from("documents").remove([path]);
     if (!error && user) loadDocuments(user.id);
   };
 
@@ -238,24 +184,6 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
         <div className="text-center">
           <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-zinc-200 border-t-zinc-900 dark:border-zinc-800 dark:border-t-zinc-50" />
           <p className="text-sm text-zinc-600 dark:text-zinc-300">Loading dashboard...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-black">
-        <div className="w-full max-w-md rounded-2xl bg-white p-8 text-center shadow-sm dark:bg-zinc-950">
-          <p className="text-sm text-zinc-600 dark:text-zinc-300">
-            We could not complete sign-in yet. Please continue to login and try again.
-          </p>
-          <button
-            onClick={() => router.replace("/login")}
-            className="mt-4 rounded-full bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-200"
-          >
-            Go to login
-          </button>
         </div>
       </div>
     );
