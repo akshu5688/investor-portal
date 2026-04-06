@@ -84,8 +84,8 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [shareEmail, setShareEmail] = useState("");
-  const [shareDocument, setShareDocument] = useState<string | null>(null);
-  const [shareDocumentName, setShareDocumentName] = useState<string | null>(null);
+  /** Storage paths (`userId/filename`) selected to email to an investor */
+  const [shareSelectedPaths, setShareSelectedPaths] = useState<string[]>([]);
   const [sharing, setSharing] = useState(false);
   const [preview, setPreview] = useState<{ url: string; name: string; category: PreviewCategory } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -146,6 +146,10 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
   }, [router, initialUser]);
 
   useEffect(() => {
+    setShareSelectedPaths((prev) => prev.filter((p) => documents.some((d) => d.path === p)));
+  }, [documents]);
+
+  useEffect(() => {
     if (!preview) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setPreview(null);
@@ -203,21 +207,37 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
     setPreview({ url: data.signedUrl, name: doc.name, category });
   };
 
+  const toggleShareSelection = (path: string) => {
+    setShareSelectedPaths((prev) => (prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]));
+  };
+
+  const addToShareSelectionAndOpenInvestors = (doc: Document) => {
+    setShareSelectedPaths((prev) => (prev.includes(doc.path) ? prev : [...prev, doc.path]));
+    setActiveTab("investors");
+  };
+
   const handleShare = async () => {
     const email = shareEmail.trim();
-    if (!email || !shareDocument) return;
-    const docLabel = shareDocumentName ?? shareDocument.split("/").pop() ?? "document";
+    if (!email || shareSelectedPaths.length === 0) return;
+    const selectedDocs = documents.filter((d) => shareSelectedPaths.includes(d.path));
+    const names = selectedDocs.map((d) => d.name);
+    const subject =
+      names.length === 1
+        ? `${userName} shared a document with you: ${names[0]}`
+        : `${userName} shared ${names.length} documents with you`;
+    const fileList = names.map((n) => `  • ${n}`).join("\n");
     setSharing(true);
     const response = await fetch("/api/send-email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         to: email,
-        subject: `${userName} shared a document with you: ${docLabel}`,
+        subject,
         text: [
-          `${userName} (${user?.email ?? "Investor Portal"}) shared a document with you.`,
+          `${userName} (${user?.email ?? "Investor Portal"}) shared ${names.length === 1 ? "a document" : `${names.length} documents`} with you.`,
           ``,
-          `File: ${docLabel}`,
+          names.length === 1 ? `File:` : `Files:`,
+          fileList,
           ``,
           `The recipient can sign in to Investor Portal with this email to access shared materials when that workflow is enabled. For now, keep this email as a record of what was sent.`,
         ].join("\n"),
@@ -226,16 +246,11 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
     setSharing(false);
     if (response.ok) {
       setShareEmail("");
-      alert("Document shared successfully!");
+      setShareSelectedPaths([]);
+      alert(names.length === 1 ? "Document sent successfully!" : `${names.length} documents sent successfully!`);
     } else {
-      alert("Failed to share document. Please try again.");
+      alert("Failed to send. Please try again.");
     }
-  };
-
-  const startShareWithInvestor = (doc: Document) => {
-    setShareDocument(doc.path);
-    setShareDocumentName(doc.name);
-    setActiveTab("investors");
   };
 
   const getInitials = (email: string): string => {
@@ -389,6 +404,9 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                       <table className="w-full">
                         <thead className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">
                           <tr>
+                            <th className="w-12 px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                              <span className="sr-only">Include in share</span>
+                            </th>
                             <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">File Name</th>
                             <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Type</th>
                             <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Uploaded</th>
@@ -399,6 +417,15 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                         <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                           {documents.slice(0, 5).map((doc) => (
                             <tr key={doc.id} className="transition hover:bg-zinc-50 dark:hover:bg-zinc-900">
+                              <td className="px-4 py-3 align-middle">
+                                <input
+                                  type="checkbox"
+                                  checked={shareSelectedPaths.includes(doc.path)}
+                                  onChange={() => toggleShareSelection(doc.path)}
+                                  className="h-4 w-4 rounded border-zinc-300 text-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 dark:border-zinc-600 dark:bg-zinc-900"
+                                  aria-label={`Include ${doc.name} when sharing with an investor`}
+                                />
+                              </td>
                               <td className="max-w-[200px] truncate px-4 py-3 text-sm">
                                 <button
                                   type="button"
@@ -425,7 +452,7 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => startShareWithInvestor(doc)}
+                                    onClick={() => addToShareSelectionAndOpenInvestors(doc)}
                                     className="rounded px-2 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
                                   >
                                     Share
@@ -467,8 +494,35 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
 
           {activeTab === "documents" && (
             <div className="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-              <div className="border-b border-zinc-200 p-4 dark:border-zinc-800">
+              <div className="flex flex-col gap-3 border-b border-zinc-200 p-4 dark:border-zinc-800 sm:flex-row sm:items-center sm:justify-between">
                 <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">All Documents</h2>
+                {documents.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <span className="text-zinc-500 dark:text-zinc-400">{shareSelectedPaths.length} selected</span>
+                    <button
+                      type="button"
+                      onClick={() => setShareSelectedPaths(documents.map((d) => d.path))}
+                      className="rounded-lg px-2 py-1 font-medium text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    >
+                      Select all
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShareSelectedPaths([])}
+                      className="rounded-lg px-2 py-1 font-medium text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      disabled={shareSelectedPaths.length === 0}
+                      onClick={() => setActiveTab("investors")}
+                      className="rounded-lg bg-blue-600 px-3 py-1.5 font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-zinc-400 dark:disabled:bg-zinc-600"
+                    >
+                      Email investor
+                    </button>
+                  </div>
+                )}
               </div>
               {documents.length === 0 ? (
                 <div className="p-8 text-center">
@@ -480,6 +534,9 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                   <table className="w-full">
                     <thead className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">
                       <tr>
+                        <th className="w-12 px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                          <span className="sr-only">Include in share</span>
+                        </th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">File Name</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Type</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Uploaded</th>
@@ -491,6 +548,15 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                     <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                       {documents.map((doc) => (
                         <tr key={doc.id} className="transition hover:bg-zinc-50 dark:hover:bg-zinc-900">
+                          <td className="px-4 py-3 align-middle">
+                            <input
+                              type="checkbox"
+                              checked={shareSelectedPaths.includes(doc.path)}
+                              onChange={() => toggleShareSelection(doc.path)}
+                              className="h-4 w-4 rounded border-zinc-300 text-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 dark:border-zinc-600 dark:bg-zinc-900"
+                              aria-label={`Include ${doc.name} when sharing with an investor`}
+                            />
+                          </td>
                           <td className="max-w-xs px-4 py-3 text-sm">
                             <button
                               type="button"
@@ -518,7 +584,7 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                               </button>
                               <button
                                 type="button"
-                                onClick={() => startShareWithInvestor(doc)}
+                                onClick={() => addToShareSelectionAndOpenInvestors(doc)}
                                 className="rounded px-2 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
                               >
                                 Share
@@ -545,50 +611,55 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
             <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
               <h2 className="mb-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Share with an investor</h2>
               <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-                Choose which file from your portal to include, then enter the investor&apos;s email.
+                Select one or more files using the checkboxes on the Documents tab (or use Share on a row), then enter the investor&apos;s email. All selected files are listed in the notification email.
               </p>
               {documents.length === 0 ? (
                 <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                  You have no documents yet. Upload files from the Dashboard or Documents tab, then return here to send one to an investor.
+                  You have no documents yet. Upload files from the Dashboard or Documents tab, then return here to send them to an investor.
                 </p>
               ) : (
                 <div className="space-y-4">
                   <div>
-                    <label
-                      htmlFor="share-document-select"
-                      className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300"
-                    >
-                      Document to send
-                    </label>
-                    <select
-                      id="share-document-select"
-                      value={shareDocument ?? ""}
-                      onChange={(e) => {
-                        const path = e.target.value;
-                        if (!path) {
-                          setShareDocument(null);
-                          setShareDocumentName(null);
-                          return;
-                        }
-                        const doc = documents.find((d) => d.path === path);
-                        setShareDocument(path);
-                        setShareDocumentName(doc?.name ?? path.split("/").pop() ?? null);
-                      }}
-                      className="block w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none ring-0 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-200 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-600 dark:focus:ring-zinc-800"
-                    >
-                      <option value="">Select a document…</option>
-                      {documents.map((doc) => (
-                        <option key={doc.path} value={doc.path}>
-                          {doc.name} — {getDocumentTypeLabel(doc.name)} · {formatDate(doc.created_at)}
-                        </option>
-                      ))}
-                    </select>
-                    {shareDocument && (
+                    <p className="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">Documents to send</p>
+                    {shareSelectedPaths.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-500 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+                        No files selected. Go to{" "}
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab("documents")}
+                          className="font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
+                        >
+                          Documents
+                        </button>{" "}
+                        and tick the files you want to include (or click Share on a row).
+                      </div>
+                    ) : (
+                      <ul className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+                        {documents
+                          .filter((d) => shareSelectedPaths.includes(d.path))
+                          .map((doc) => (
+                            <li
+                              key={doc.path}
+                              className="flex items-center justify-between gap-3 px-3 py-2 text-sm dark:bg-zinc-950"
+                            >
+                              <span className="min-w-0 truncate font-medium text-zinc-900 dark:text-zinc-50">{doc.name}</span>
+                              <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
+                                {getDocumentTypeLabel(doc.name)}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => toggleShareSelection(doc.path)}
+                                className="shrink-0 rounded px-2 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                              >
+                                Remove
+                              </button>
+                            </li>
+                          ))}
+                      </ul>
+                    )}
+                    {shareSelectedPaths.length > 0 && (
                       <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                        This is the file that will be referenced in the email to the investor:{" "}
-                        <span className="font-medium text-zinc-700 dark:text-zinc-300">
-                          {shareDocumentName ?? shareDocument.split("/").pop()}
-                        </span>
+                        {shareSelectedPaths.length} file{shareSelectedPaths.length === 1 ? "" : "s"} will be listed in the email.
                       </p>
                     )}
                   </div>
@@ -605,10 +676,10 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                   <button
                     type="button"
                     onClick={handleShare}
-                    disabled={sharing || !shareEmail.trim() || !shareDocument}
+                    disabled={sharing || !shareEmail.trim() || shareSelectedPaths.length === 0}
                     className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-zinc-400"
                   >
-                    {sharing ? "Sending…" : "Send to investor"}
+                    {sharing ? "Sending…" : shareSelectedPaths.length <= 1 ? "Send to investor" : `Send ${shareSelectedPaths.length} documents`}
                   </button>
                 </div>
               )}
