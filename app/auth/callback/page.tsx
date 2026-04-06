@@ -13,7 +13,11 @@ export default function AuthCallbackPage() {
     const completeAuthFlow = async () => {
       const url = new URL(window.location.href);
       const code = url.searchParams.get("code");
-      const next = url.searchParams.get("next") || "/dashboard";
+      const rawNext = url.searchParams.get("next") || "/dashboard";
+      const next =
+        rawNext.startsWith("/") && !rawNext.startsWith("//")
+          ? rawNext
+          : "/dashboard";
 
       const hashParams = new URLSearchParams(window.location.hash.slice(1));
       const accessToken = hashParams.get("access_token");
@@ -34,7 +38,12 @@ export default function AuthCallbackPage() {
       } = await supabase.auth.getSession();
 
       if (!mounted) return;
-      router.replace(session ? next : "/login");
+      if (session) {
+        router.refresh();
+        router.replace(next);
+      } else {
+        router.replace("/login");
+      }
     };
 
     completeAuthFlow();

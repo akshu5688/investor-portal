@@ -1,12 +1,11 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { getEmailConfirmationRedirectTo } from "@/lib/authRedirect";
 import { supabase } from "@/lib/supabaseClient";
 
 export default function SignupPage() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -29,6 +28,9 @@ export default function SignupPage() {
     const { error: signUpError } = await supabase.auth.signUp({
       email,
       password,
+      options: {
+        emailRedirectTo: getEmailConfirmationRedirectTo(),
+      },
     });
 
     setLoading(false);
@@ -39,16 +41,11 @@ export default function SignupPage() {
     }
 
     setMessage(
-      "Check your email to confirm your account, then you can log in."
+      "Check your email to confirm your account. After you confirm, you’ll be signed in and taken to your dashboard."
     );
     setEmail("");
     setPassword("");
     setConfirmPassword("");
-
-    // Optionally redirect to login after a short delay
-    setTimeout(() => {
-      router.push("/login");
-    }, 2000);
   };
 
   return (

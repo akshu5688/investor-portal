@@ -3,6 +3,7 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { getEmailConfirmationRedirectTo } from "@/lib/authRedirect";
 import { supabase } from "@/lib/supabaseClient";
 
 function getSupabaseSetupWarning(): string | null {
@@ -109,6 +110,9 @@ export default function LoginPage() {
       const { error: resendError } = await supabase.auth.resend({
         type: "signup",
         email,
+        options: {
+          emailRedirectTo: getEmailConfirmationRedirectTo(),
+        },
       });
 
       if (resendError) {

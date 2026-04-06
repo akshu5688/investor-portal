@@ -43,6 +43,30 @@ function formatDate(dateString: string): string {
   });
 }
 
+function getFileExtension(fileName: string): string {
+  const parts = fileName.split(".");
+  return parts.length > 1 ? (parts.pop() ?? "").toLowerCase() : "";
+}
+
+function getDocumentTypeLabel(fileName: string): string {
+  const ext = getFileExtension(fileName);
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(ext)) return "Image";
+  if (ext === "pdf") return "PDF";
+  if (["doc", "docx"].includes(ext)) return "Word";
+  if (["xls", "xlsx", "csv"].includes(ext)) return "Spreadsheet";
+  if (ext === "txt") return "Text";
+  return ext ? ext.toUpperCase() : "File";
+}
+
+type PreviewCategory = "image" | "pdf";
+
+function getPreviewCategory(fileName: string): PreviewCategory | null {
+  const ext = getFileExtension(fileName);
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(ext)) return "image";
+  if (ext === "pdf") return "pdf";
+  return null;
+}
+
 interface DashboardClientProps {
   initialUser?: User | null;
 }
@@ -61,7 +85,10 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [shareEmail, setShareEmail] = useState("");
   const [shareDocument, setShareDocument] = useState<string | null>(null);
+  const [shareDocumentName, setShareDocumentName] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [preview, setPreview] = useState<{ url: string; name: string; category: PreviewCategory } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   async function loadDocuments(userId: string) {
     const { data, error } = await supabase.storage
@@ -118,6 +145,15 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
     ensureUser();
   }, [router, initialUser]);
 
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPreview(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [preview]);
+
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push("/login");
@@ -151,26 +187,55 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
     if (!error && user) loadDocuments(user.id);
   };
 
+  const viewDocument = async (doc: Document) => {
+    setPreviewLoading(true);
+    const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.path, 3600);
+    setPreviewLoading(false);
+    if (error || !data?.signedUrl) {
+      alert(error?.message ?? "Could not open this document. Try again.");
+      return;
+    }
+    const category = getPreviewCategory(doc.name);
+    if (!category) {
+      window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    setPreview({ url: data.signedUrl, name: doc.name, category });
+  };
+
   const handleShare = async () => {
-    if (!shareEmail || !shareDocument) return;
+    const email = shareEmail.trim();
+    if (!email || !shareDocument) return;
+    const docLabel = shareDocumentName ?? shareDocument.split("/").pop() ?? "document";
     setSharing(true);
     const response = await fetch("/api/send-email", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        to: shareEmail,
-        subject: "Document shared from Investor Portal",
-        text: `A document has been shared with you. Please log in to view it.`,
+        to: email,
+        subject: `${userName} shared a document with you: ${docLabel}`,
+        text: [
+          `${userName} (${user?.email ?? "Investor Portal"}) shared a document with you.`,
+          ``,
+          `File: ${docLabel}`,
+          ``,
+          `The recipient can sign in to Investor Portal with this email to access shared materials when that workflow is enabled. For now, keep this email as a record of what was sent.`,
+        ].join("\n"),
       }),
     });
     setSharing(false);
     if (response.ok) {
       setShareEmail("");
-      setShareDocument(null);
       alert("Document shared successfully!");
     } else {
       alert("Failed to share document. Please try again.");
     }
+  };
+
+  const startShareWithInvestor = (doc: Document) => {
+    setShareDocument(doc.path);
+    setShareDocumentName(doc.name);
+    setActiveTab("investors");
   };
 
   const getInitials = (email: string): string => {
@@ -325,6 +390,7 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                         <thead className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">
                           <tr>
                             <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">File Name</th>
+                            <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Type</th>
                             <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Uploaded</th>
                             <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Size</th>
                             <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Actions</th>
@@ -333,13 +399,44 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                         <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                           {documents.slice(0, 5).map((doc) => (
                             <tr key={doc.id} className="transition hover:bg-zinc-50 dark:hover:bg-zinc-900">
-                              <td className="px-4 py-3 text-sm text-zinc-900 dark:text-zinc-50">{doc.name}</td>
+                              <td className="max-w-[200px] truncate px-4 py-3 text-sm">
+                                <button
+                                  type="button"
+                                  onClick={() => viewDocument(doc)}
+                                  disabled={previewLoading}
+                                  className="text-left font-medium text-blue-600 underline-offset-2 hover:underline disabled:opacity-50 dark:text-blue-400"
+                                  title="Open or preview document"
+                                >
+                                  {doc.name}
+                                </button>
+                              </td>
+                              <td className="whitespace-nowrap px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">{getDocumentTypeLabel(doc.name)}</td>
                               <td className="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">{formatDate(doc.created_at)}</td>
                               <td className="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">{formatFileSize(doc.size)}</td>
                               <td className="px-4 py-3">
-                                <div className="flex items-center gap-2">
-                                  <button onClick={() => setShareDocument(doc.path)} className="rounded px-2 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20">Share</button>
-                                  <button onClick={() => handleDelete(doc.path)} className="rounded px-2 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">Delete</button>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => viewDocument(doc)}
+                                    disabled={previewLoading}
+                                    className="rounded px-2 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                                  >
+                                    View
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => startShareWithInvestor(doc)}
+                                    className="rounded px-2 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                                  >
+                                    Share
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDelete(doc.path)}
+                                    className="rounded px-2 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
+                                  >
+                                    Delete
+                                  </button>
                                 </div>
                               </td>
                             </tr>
@@ -384,6 +481,7 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                     <thead className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">
                       <tr>
                         <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">File Name</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Type</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Uploaded</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Size</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Shared With</th>
@@ -393,14 +491,45 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                     <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                       {documents.map((doc) => (
                         <tr key={doc.id} className="transition hover:bg-zinc-50 dark:hover:bg-zinc-900">
-                          <td className="px-4 py-3 text-sm text-zinc-900 dark:text-zinc-50">{doc.name}</td>
+                          <td className="max-w-xs px-4 py-3 text-sm">
+                            <button
+                              type="button"
+                              onClick={() => viewDocument(doc)}
+                              disabled={previewLoading}
+                              className="text-left font-medium text-blue-600 underline-offset-2 hover:underline disabled:opacity-50 dark:text-blue-400"
+                              title="Open or preview document"
+                            >
+                              {doc.name}
+                            </button>
+                          </td>
+                          <td className="whitespace-nowrap px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">{getDocumentTypeLabel(doc.name)}</td>
                           <td className="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">{formatDate(doc.created_at)}</td>
                           <td className="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">{formatFileSize(doc.size)}</td>
                           <td className="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">-</td>
                           <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              <button onClick={() => setShareDocument(doc.path)} className="rounded px-2 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20">Share</button>
-                              <button onClick={() => handleDelete(doc.path)} className="rounded px-2 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">Delete</button>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => viewDocument(doc)}
+                                disabled={previewLoading}
+                                className="rounded px-2 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                              >
+                                View
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => startShareWithInvestor(doc)}
+                                className="rounded px-2 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
+                              >
+                                Share
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDelete(doc.path)}
+                                className="rounded px-2 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
+                              >
+                                Delete
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -414,11 +543,57 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
 
           {activeTab === "investors" && (
             <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-              <h2 className="mb-4 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Share Document</h2>
-              {shareDocument ? (
+              <h2 className="mb-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Share with an investor</h2>
+              <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
+                Choose which file from your portal to include, then enter the investor&apos;s email.
+              </p>
+              {documents.length === 0 ? (
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  You have no documents yet. Upload files from the Dashboard or Documents tab, then return here to send one to an investor.
+                </p>
+              ) : (
                 <div className="space-y-4">
                   <div>
-                    <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Investor Email</label>
+                    <label
+                      htmlFor="share-document-select"
+                      className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300"
+                    >
+                      Document to send
+                    </label>
+                    <select
+                      id="share-document-select"
+                      value={shareDocument ?? ""}
+                      onChange={(e) => {
+                        const path = e.target.value;
+                        if (!path) {
+                          setShareDocument(null);
+                          setShareDocumentName(null);
+                          return;
+                        }
+                        const doc = documents.find((d) => d.path === path);
+                        setShareDocument(path);
+                        setShareDocumentName(doc?.name ?? path.split("/").pop() ?? null);
+                      }}
+                      className="block w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none ring-0 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-200 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50 dark:focus:border-zinc-600 dark:focus:ring-zinc-800"
+                    >
+                      <option value="">Select a document…</option>
+                      {documents.map((doc) => (
+                        <option key={doc.path} value={doc.path}>
+                          {doc.name} — {getDocumentTypeLabel(doc.name)} · {formatDate(doc.created_at)}
+                        </option>
+                      ))}
+                    </select>
+                    {shareDocument && (
+                      <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                        This is the file that will be referenced in the email to the investor:{" "}
+                        <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                          {shareDocumentName ?? shareDocument.split("/").pop()}
+                        </span>
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Investor email</label>
                     <input
                       type="email"
                       value={shareEmail}
@@ -428,15 +603,14 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                     />
                   </div>
                   <button
+                    type="button"
                     onClick={handleShare}
-                    disabled={sharing || !shareEmail}
+                    disabled={sharing || !shareEmail.trim() || !shareDocument}
                     className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-zinc-400"
                   >
-                    {sharing ? "Sharing..." : "Share Document"}
+                    {sharing ? "Sending…" : "Send to investor"}
                   </button>
                 </div>
-              ) : (
-                <p className="text-sm text-zinc-500 dark:text-zinc-400">Select a document to share from the Documents tab.</p>
               )}
             </div>
           )}
@@ -467,6 +641,40 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
           )}
         </div>
       </main>
+
+      {preview && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="doc-preview-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setPreview(null);
+          }}
+        >
+          <div className="relative flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
+            <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+              <p id="doc-preview-title" className="truncate pr-4 text-sm font-medium text-zinc-900 dark:text-zinc-50">
+                {preview.name}
+              </p>
+              <button
+                type="button"
+                onClick={() => setPreview(null)}
+                className="shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                Close
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto bg-zinc-100 dark:bg-zinc-900">
+              {preview.category === "image" ? (
+                <img src={preview.url} alt={preview.name} className="mx-auto max-h-[80vh] w-auto max-w-full object-contain" />
+              ) : (
+                <iframe title={preview.name} src={preview.url} className="h-[min(80vh,720px)] w-full border-0 bg-white" />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
