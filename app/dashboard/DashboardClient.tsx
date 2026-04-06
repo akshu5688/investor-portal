@@ -63,6 +63,39 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
   const [shareDocument, setShareDocument] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
 
+  async function loadDocuments(userId: string) {
+    const { data, error } = await supabase.storage
+      .from("documents")
+      .list(userId, {
+        limit: 100,
+        offset: 0,
+        sortBy: { column: "created_at", order: "desc" },
+      });
+
+    if (!error && data) {
+      const docs: Document[] = data.map((file) => ({
+        name: file.name,
+        path: `${userId}/${file.name}`,
+        created_at: file.created_at,
+        size: file.metadata?.size || 0,
+        id: file.id || file.name,
+      }));
+      setDocuments(docs);
+    }
+  }
+
+  async function loadActivities() {
+    const mockActivities: Activity[] = [
+      {
+        id: "1",
+        action: "uploaded",
+        document: "PitchDeck.pdf",
+        timestamp: new Date().toISOString(),
+      },
+    ];
+    setActivities(mockActivities);
+  }
+
   useEffect(() => {
     const ensureUser = async () => {
       if (initialUser) {
@@ -83,40 +116,7 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
       loadActivities();
     };
     ensureUser();
-  }, [router, initialUser?.id]);
-
-  const loadDocuments = async (userId: string) => {
-    const { data, error } = await supabase.storage
-      .from("documents")
-      .list(userId, {
-        limit: 100,
-        offset: 0,
-        sortBy: { column: "created_at", order: "desc" },
-      });
-
-    if (!error && data) {
-      const docs: Document[] = data.map((file) => ({
-        name: file.name,
-        path: `${userId}/${file.name}`,
-        created_at: file.created_at,
-        size: file.metadata?.size || 0,
-        id: file.id || file.name,
-      }));
-      setDocuments(docs);
-    }
-  };
-
-  const loadActivities = async () => {
-    const mockActivities: Activity[] = [
-      {
-        id: "1",
-        action: "uploaded",
-        document: "PitchDeck.pdf",
-        timestamp: new Date().toISOString(),
-      },
-    ];
-    setActivities(mockActivities);
-  };
+  }, [router, initialUser]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
