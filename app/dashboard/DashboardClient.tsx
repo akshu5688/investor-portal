@@ -4,68 +4,15 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabaseClient";
+import DocumentsTable from "@/components/DocumentsTable";
+import ShareDocumentModal from "@/components/ShareDocumentModal";
+import type { ActivityLogRow, UserDocument } from "@/lib/types/documents";
+import { formatDate } from "@/lib/format";
 import SettingsPanel from "./SettingsPanel";
-
-interface Document {
-  name: string;
-  path: string;
-  created_at: string;
-  size: number;
-  id: string;
-}
-
-interface Activity {
-  id: string;
-  action: string;
-  document: string;
-  timestamp: string;
-  user?: string;
-}
 
 function getNameFromEmail(email: string): string {
   const name = email.split("@")[0];
   return name.charAt(0).toUpperCase() + name.slice(1);
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return "0 Bytes";
-  const k = 1024;
-  const sizes = ["Bytes", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + " " + sizes[i];
-}
-
-function formatDate(dateString: string): string {
-  const date = new Date(dateString);
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function getFileExtension(fileName: string): string {
-  const parts = fileName.split(".");
-  return parts.length > 1 ? (parts.pop() ?? "").toLowerCase() : "";
-}
-
-function getDocumentTypeLabel(fileName: string): string {
-  const ext = getFileExtension(fileName);
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(ext)) return "Image";
-  if (ext === "pdf") return "PDF";
-  if (["doc", "docx"].includes(ext)) return "Word";
-  if (["xls", "xlsx", "csv"].includes(ext)) return "Spreadsheet";
-  if (ext === "txt") return "Text";
-  return ext ? ext.toUpperCase() : "File";
-}
-
-type PreviewCategory = "image" | "pdf";
-
-function getPreviewCategory(fileName: string): PreviewCategory | null {
-  const ext = getFileExtension(fileName);
-  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"].includes(ext)) return "image";
-  if (ext === "pdf") return "pdf";
-  return null;
 }
 
 interface DashboardClientProps {
@@ -77,51 +24,72 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
   const [user, setUser] = useState<User | null>(initialUser);
   const [loading, setLoading] = useState(!initialUser);
   const [activeTab, setActiveTab] = useState("dashboard");
-  const [documents, setDocuments] = useState<Document[]>([]);
-  const [activities, setActivities] = useState<Activity[]>([]);
+  const [documents, setDocuments] = useState<UserDocument[]>([]);
+  const [activities, setActivities] = useState<ActivityLogRow[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
-  const [shareEmail, setShareEmail] = useState("");
-  /** Storage paths (`userId/filename`) selected to email to an investor */
-  const [shareSelectedPaths, setShareSelectedPaths] = useState<string[]>([]);
-  const [sharing, setSharing] = useState(false);
-  const [preview, setPreview] = useState<{ url: string; name: string; category: PreviewCategory } | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
+  const [shareTarget, setShareTarget] = useState<UserDocument | null>(null);
 
   async function loadDocuments(userId: string) {
-    const { data, error } = await supabase.storage
+    const { data, error } = await supabase
       .from("documents")
-      .list(userId, {
-        limit: 100,
-        offset: 0,
-        sortBy: { column: "created_at", order: "desc" },
-      });
+      .select(
+        `
+        id,
+        title,
+        file_path,
+        file_type,
+        file_size,
+        created_at,
+        document_access ( investor_email )
+      `
+      )
+      .eq("owner_user_id", userId)
+      .order("created_at", { ascending: false });
 
-    if (!error && data) {
-      const docs: Document[] = data.map((file) => ({
-        name: file.name,
-        path: `${userId}/${file.name}`,
-        created_at: file.created_at,
-        size: file.metadata?.size || 0,
-        id: file.id || file.name,
-      }));
-      setDocuments(docs);
+    if (error) {
+      console.error("loadDocuments:", error.message);
+      setDocuments([]);
+      return;
     }
+
+    const rows = data ?? [];
+    const mapped: UserDocument[] = rows.map((row) => {
+      const access = row.document_access as { investor_email: string }[] | null | undefined;
+      const sharedWith = Array.isArray(access)
+        ? access.map((a) => a.investor_email)
+        : [];
+      return {
+        id: row.id as string,
+        title: row.title as string,
+        file_path: row.file_path as string,
+        file_type: (row.file_type as string | null) ?? null,
+        file_size: row.file_size != null ? Number(row.file_size) : null,
+        created_at: row.created_at as string,
+        sharedWith,
+      };
+    });
+    setDocuments(mapped);
   }
 
-  async function loadActivities() {
-    const mockActivities: Activity[] = [
-      {
-        id: "1",
-        action: "uploaded",
-        document: "PitchDeck.pdf",
-        timestamp: new Date().toISOString(),
-      },
-    ];
-    setActivities(mockActivities);
+  async function loadActivities(userId: string) {
+    const { data, error } = await supabase
+      .from("activity_logs")
+      .select("id, action, meta, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(50);
+
+    if (error) {
+      console.error("loadActivities:", error.message);
+      setActivities([]);
+      return;
+    }
+
+    setActivities((data ?? []) as ActivityLogRow[]);
   }
 
   useEffect(() => {
@@ -129,8 +97,8 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
       if (initialUser) {
         setUser(initialUser);
         setLoading(false);
-        loadDocuments(initialUser.id);
-        loadActivities();
+        await loadDocuments(initialUser.id);
+        await loadActivities(initialUser.id);
         return;
       }
       const { data, error } = await supabase.auth.getUser();
@@ -140,24 +108,11 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
       }
       setUser(data.user);
       setLoading(false);
-      loadDocuments(data.user.id);
-      loadActivities();
+      await loadDocuments(data.user.id);
+      await loadActivities(data.user.id);
     };
-    ensureUser();
+    void ensureUser();
   }, [router, initialUser]);
-
-  useEffect(() => {
-    setShareSelectedPaths((prev) => prev.filter((p) => documents.some((d) => d.path === p)));
-  }, [documents]);
-
-  useEffect(() => {
-    if (!preview) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setPreview(null);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [preview]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -174,84 +129,64 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
     setUploading(true);
     const fileName = `${Date.now()}-${file.name}`;
     const filePath = `${user.id}/${fileName}`;
-    const { error } = await supabase.storage.from("documents").upload(filePath, file);
-    setUploading(false);
-    if (error) {
-      setUploadError(error.message);
+
+    const { error: uploadErrorResult } = await supabase.storage
+      .from("documents")
+      .upload(filePath, file);
+
+    if (uploadErrorResult) {
+      setUploading(false);
+      setUploadError(uploadErrorResult.message);
       return;
     }
+
+    const { error: insertError } = await supabase.from("documents").insert({
+      owner_user_id: user.id,
+      title: file.name,
+      file_path: filePath,
+      file_type: file.type || null,
+      file_size: file.size,
+    });
+
+    if (insertError) {
+      await supabase.storage.from("documents").remove([filePath]);
+      setUploading(false);
+      setUploadError(insertError.message);
+      return;
+    }
+
     setFile(null);
     setUploadMessage("File uploaded successfully!");
-    loadDocuments(user.id);
-    loadActivities();
+    setUploading(false);
+    await loadDocuments(user.id);
+    await loadActivities(user.id);
   };
 
-  const handleDelete = async (path: string) => {
+  const handleDelete = async (doc: UserDocument) => {
+    if (!user) return;
     if (!confirm("Are you sure you want to delete this file?")) return;
-    const { error } = await supabase.storage.from("documents").remove([path]);
-    if (!error && user) loadDocuments(user.id);
-  };
 
-  const viewDocument = async (doc: Document) => {
-    setPreviewLoading(true);
-    const { data, error } = await supabase.storage.from("documents").createSignedUrl(doc.path, 3600);
-    setPreviewLoading(false);
-    if (error || !data?.signedUrl) {
-      alert(error?.message ?? "Could not open this document. Try again.");
+    const { error: deleteError } = await supabase
+      .from("documents")
+      .delete()
+      .eq("id", doc.id)
+      .eq("owner_user_id", user.id);
+
+    if (deleteError) {
+      alert(deleteError.message);
       return;
     }
-    const category = getPreviewCategory(doc.name);
-    if (!category) {
-      window.open(data.signedUrl, "_blank", "noopener,noreferrer");
-      return;
+
+    const { error: storageError } = await supabase.storage
+      .from("documents")
+      .remove([doc.file_path]);
+
+    if (storageError) {
+      console.error("Storage delete:", storageError.message);
     }
-    setPreview({ url: data.signedUrl, name: doc.name, category });
-  };
 
-  const toggleShareSelection = (path: string) => {
-    setShareSelectedPaths((prev) => (prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]));
-  };
-
-  const addToShareSelectionAndOpenInvestors = (doc: Document) => {
-    setShareSelectedPaths((prev) => (prev.includes(doc.path) ? prev : [...prev, doc.path]));
-    setActiveTab("investors");
-  };
-
-  const handleShare = async () => {
-    const email = shareEmail.trim();
-    if (!email || shareSelectedPaths.length === 0) return;
-    const selectedDocs = documents.filter((d) => shareSelectedPaths.includes(d.path));
-    const names = selectedDocs.map((d) => d.name);
-    const subject =
-      names.length === 1
-        ? `${userName} shared a document with you: ${names[0]}`
-        : `${userName} shared ${names.length} documents with you`;
-    const fileList = names.map((n) => `  • ${n}`).join("\n");
-    setSharing(true);
-    const response = await fetch("/api/send-email", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        to: email,
-        subject,
-        text: [
-          `${userName} (${user?.email ?? "Investor Portal"}) shared ${names.length === 1 ? "a document" : `${names.length} documents`} with you.`,
-          ``,
-          names.length === 1 ? `File:` : `Files:`,
-          fileList,
-          ``,
-          `The recipient can sign in to Investor Portal with this email to access shared materials when that workflow is enabled. For now, keep this email as a record of what was sent.`,
-        ].join("\n"),
-      }),
-    });
-    setSharing(false);
-    if (response.ok) {
-      setShareEmail("");
-      setShareSelectedPaths([]);
-      alert(names.length === 1 ? "Document sent successfully!" : `${names.length} documents sent successfully!`);
-    } else {
-      alert("Failed to send. Please try again.");
-    }
+    await loadDocuments(user.id);
+    await loadActivities(user.id);
   };
 
   const getInitials = (email: string): string => {
@@ -270,22 +205,34 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
     );
   }
 
-  const userName = user?.user_metadata?.full_name || getNameFromEmail(user?.email || "");
+  const userName =
+    user?.user_metadata?.full_name && typeof user.user_metadata.full_name === "string"
+      ? user.user_metadata.full_name
+      : getNameFromEmail(user?.email || "");
   const totalDocuments = documents.length;
-  const totalViews = 0;
+  const totalViews = activities.filter((a) => a.action === "Viewed shared document").length;
   const lastUpload = documents[0]?.created_at || null;
+
+  const refreshAfterShare = async () => {
+    if (!user) return;
+    await loadDocuments(user.id);
+    await loadActivities(user.id);
+  };
 
   return (
     <div className="flex min-h-screen bg-zinc-50 dark:bg-black">
-      <aside className="w-64 border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
+      <aside className="relative w-64 border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
         <div className="flex h-16 items-center gap-3 border-b border-zinc-200 px-6 dark:border-zinc-800">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-sm font-semibold text-white">IP</div>
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-600 text-sm font-semibold text-white">
+            IP
+          </div>
           <span className="font-semibold text-zinc-900 dark:text-zinc-50">Investor Portal</span>
         </div>
         <nav className="p-4">
           {["dashboard", "documents", "investors", "settings", "activity"].map((tab) => (
             <button
               key={tab}
+              type="button"
               onClick={() => setActiveTab(tab)}
               className={`mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition ${
                 activeTab === tab
@@ -293,7 +240,11 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                   : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900"
               }`}
             >
-              <span>{["📊", "📁", "👥", "⚙️", "📋"][["dashboard", "documents", "investors", "settings", "activity"].indexOf(tab)]}</span>
+              <span>
+                {["📊", "📁", "👥", "⚙️", "📋"][
+                  ["dashboard", "documents", "investors", "settings", "activity"].indexOf(tab)
+                ]}
+              </span>
               {tab === "activity" ? "Activity Log" : tab.charAt(0).toUpperCase() + tab.slice(1)}
             </button>
           ))}
@@ -309,6 +260,7 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
             </div>
           </div>
           <button
+            type="button"
             onClick={handleLogout}
             className="mt-3 w-full rounded-lg border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 dark:border-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-900"
           >
@@ -324,7 +276,9 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
               Welcome back, {userName} 👋
             </h1>
             <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-              {user?.email_confirmed_at ? "Email verified • your account is protected" : "Email not verified • please check your inbox"}
+              {user?.email_confirmed_at
+                ? "Email verified • your account is protected"
+                : "Email not verified • please check your inbox"}
             </p>
           </div>
 
@@ -341,7 +295,7 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
             <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm transition hover:shadow-md dark:border-zinc-800 dark:bg-zinc-950">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Total Views</p>
+                  <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Document views</p>
                   <p className="mt-1 text-2xl font-bold text-zinc-900 dark:text-zinc-50">{totalViews}</p>
                 </div>
                 <div className="text-2xl">👁</div>
@@ -351,7 +305,9 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xs font-medium text-zinc-500 dark:text-zinc-400">Last Upload</p>
-                  <p className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">{lastUpload ? formatDate(lastUpload) : "Never"}</p>
+                  <p className="mt-1 text-sm font-semibold text-zinc-900 dark:text-zinc-50">
+                    {lastUpload ? formatDate(lastUpload) : "Never"}
+                  </p>
                 </div>
                 <div className="text-2xl">🗓</div>
               </div>
@@ -381,98 +337,30 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                     />
                     <button
                       type="button"
-                      onClick={handleUpload}
+                      onClick={() => void handleUpload()}
                       disabled={uploading || !file}
                       className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-zinc-400"
                     >
                       {uploading ? "Uploading..." : "Upload File"}
                     </button>
-                    {uploadError && <p className="text-sm text-red-600 dark:text-red-400">{uploadError}</p>}
-                    {uploadMessage && <p className="text-sm text-emerald-600 dark:text-emerald-400">{uploadMessage}</p>}
+                    {uploadError && (
+                      <p className="text-sm text-red-600 dark:text-red-400">{uploadError}</p>
+                    )}
+                    {uploadMessage && (
+                      <p className="text-sm text-emerald-600 dark:text-emerald-400">{uploadMessage}</p>
+                    )}
                   </div>
                 </div>
                 <div className="mt-6 rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
                   <div className="border-b border-zinc-200 p-4 dark:border-zinc-800">
                     <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Recent Documents</h2>
                   </div>
-                  {documents.length === 0 ? (
-                    <div className="p-8 text-center">
-                      <p className="text-sm text-zinc-500 dark:text-zinc-400">No documents yet.</p>
-                      <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">Upload your first investor document to get started.</p>
-                    </div>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full">
-                        <thead className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">
-                          <tr>
-                            <th className="w-12 px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                              <span className="sr-only">Include in share</span>
-                            </th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">File Name</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Type</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Uploaded</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Size</th>
-                            <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                          {documents.slice(0, 5).map((doc) => (
-                            <tr key={doc.id} className="transition hover:bg-zinc-50 dark:hover:bg-zinc-900">
-                              <td className="px-4 py-3 align-middle">
-                                <input
-                                  type="checkbox"
-                                  checked={shareSelectedPaths.includes(doc.path)}
-                                  onChange={() => toggleShareSelection(doc.path)}
-                                  className="h-4 w-4 rounded border-zinc-300 text-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 dark:border-zinc-600 dark:bg-zinc-900"
-                                  aria-label={`Include ${doc.name} when sharing with an investor`}
-                                />
-                              </td>
-                              <td className="max-w-[200px] truncate px-4 py-3 text-sm">
-                                <button
-                                  type="button"
-                                  onClick={() => viewDocument(doc)}
-                                  disabled={previewLoading}
-                                  className="text-left font-medium text-blue-600 underline-offset-2 hover:underline disabled:opacity-50 dark:text-blue-400"
-                                  title="Open or preview document"
-                                >
-                                  {doc.name}
-                                </button>
-                              </td>
-                              <td className="whitespace-nowrap px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">{getDocumentTypeLabel(doc.name)}</td>
-                              <td className="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">{formatDate(doc.created_at)}</td>
-                              <td className="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">{formatFileSize(doc.size)}</td>
-                              <td className="px-4 py-3">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <button
-                                    type="button"
-                                    onClick={() => viewDocument(doc)}
-                                    disabled={previewLoading}
-                                    className="rounded px-2 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                                  >
-                                    View
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => addToShareSelectionAndOpenInvestors(doc)}
-                                    className="rounded px-2 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
-                                  >
-                                    Share
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDelete(doc.path)}
-                                    className="rounded px-2 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                  <DocumentsTable
+                    documents={documents}
+                    maxRows={5}
+                    onShare={(doc) => setShareTarget(doc)}
+                    onDelete={(doc) => void handleDelete(doc)}
+                  />
                 </div>
               </div>
               <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
@@ -481,12 +369,32 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                   {activities.length === 0 ? (
                     <p className="text-sm text-zinc-500 dark:text-zinc-400">No activity yet</p>
                   ) : (
-                    activities.map((activity) => (
-                      <div key={activity.id} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
-                        <p className="text-sm text-zinc-900 dark:text-zinc-50"><span className="font-medium">You</span> {activity.action} <span className="font-medium">{activity.document}</span></p>
-                        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{formatDate(activity.timestamp)}</p>
-                      </div>
-                    ))
+                    activities.slice(0, 8).map((activity) => {
+                      const meta = activity.meta;
+                      const docTitle =
+                        meta &&
+                        typeof meta === "object" &&
+                        "document_title" in meta &&
+                        typeof (meta as { document_title?: unknown }).document_title === "string"
+                          ? (meta as { document_title: string }).document_title
+                          : null;
+                      return (
+                        <div key={activity.id} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                          <p className="text-sm text-zinc-900 dark:text-zinc-50">
+                            <span className="font-medium">You</span> {activity.action}
+                            {docTitle ? (
+                              <>
+                                {" "}
+                                <span className="font-medium">{docTitle}</span>
+                              </>
+                            ) : null}
+                          </p>
+                          <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                            {formatDate(activity.created_at)}
+                          </p>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -494,197 +402,59 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
           )}
 
           {activeTab === "documents" && (
-            <div className="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-              <div className="flex flex-col gap-3 border-b border-zinc-200 p-4 dark:border-zinc-800 sm:flex-row sm:items-center sm:justify-between">
-                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">All Documents</h2>
-                {documents.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <span className="text-zinc-500 dark:text-zinc-400">{shareSelectedPaths.length} selected</span>
-                    <button
-                      type="button"
-                      onClick={() => setShareSelectedPaths(documents.map((d) => d.path))}
-                      className="rounded-lg px-2 py-1 font-medium text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                    >
-                      Select all
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShareSelectedPaths([])}
-                      className="rounded-lg px-2 py-1 font-medium text-zinc-700 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                    >
-                      Clear
-                    </button>
-                    <button
-                      type="button"
-                      disabled={shareSelectedPaths.length === 0}
-                      onClick={() => setActiveTab("investors")}
-                      className="rounded-lg bg-blue-600 px-3 py-1.5 font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-zinc-400 dark:disabled:bg-zinc-600"
-                    >
-                      Email investor
-                    </button>
-                  </div>
-                )}
+            <div className="space-y-6">
+              <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                <h2 className="mb-4 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Upload Documents</h2>
+                <div className="space-y-4">
+                  <input
+                    type="file"
+                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                    className="block w-full text-sm text-zinc-700 file:mr-4 file:rounded-lg file:border-0 file:bg-blue-600 file:px-4 file:py-2 file:text-sm file:font-medium file:text-white hover:file:bg-blue-700 dark:text-zinc-200"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void handleUpload()}
+                    disabled={uploading || !file}
+                    className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-zinc-400"
+                  >
+                    {uploading ? "Uploading..." : "Upload File"}
+                  </button>
+                  {uploadError && (
+                    <p className="text-sm text-red-600 dark:text-red-400">{uploadError}</p>
+                  )}
+                  {uploadMessage && (
+                    <p className="text-sm text-emerald-600 dark:text-emerald-400">{uploadMessage}</p>
+                  )}
+                </div>
               </div>
-              {documents.length === 0 ? (
-                <div className="p-8 text-center">
-                  <p className="text-sm text-zinc-500 dark:text-zinc-400">No documents yet.</p>
-                  <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">Upload your first investor document to get started.</p>
+
+              <div className="rounded-xl border border-zinc-200 bg-white shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
+                <div className="border-b border-zinc-200 p-4 dark:border-zinc-800">
+                  <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">All Documents</h2>
                 </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead className="border-b border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900">
-                      <tr>
-                        <th className="w-12 px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">
-                          <span className="sr-only">Include in share</span>
-                        </th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">File Name</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Type</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Uploaded</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Size</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Shared With</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-zinc-500 dark:text-zinc-400">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                      {documents.map((doc) => (
-                        <tr key={doc.id} className="transition hover:bg-zinc-50 dark:hover:bg-zinc-900">
-                          <td className="px-4 py-3 align-middle">
-                            <input
-                              type="checkbox"
-                              checked={shareSelectedPaths.includes(doc.path)}
-                              onChange={() => toggleShareSelection(doc.path)}
-                              className="h-4 w-4 rounded border-zinc-300 text-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 dark:border-zinc-600 dark:bg-zinc-900"
-                              aria-label={`Include ${doc.name} when sharing with an investor`}
-                            />
-                          </td>
-                          <td className="max-w-xs px-4 py-3 text-sm">
-                            <button
-                              type="button"
-                              onClick={() => viewDocument(doc)}
-                              disabled={previewLoading}
-                              className="text-left font-medium text-blue-600 underline-offset-2 hover:underline disabled:opacity-50 dark:text-blue-400"
-                              title="Open or preview document"
-                            >
-                              {doc.name}
-                            </button>
-                          </td>
-                          <td className="whitespace-nowrap px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">{getDocumentTypeLabel(doc.name)}</td>
-                          <td className="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">{formatDate(doc.created_at)}</td>
-                          <td className="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">{formatFileSize(doc.size)}</td>
-                          <td className="px-4 py-3 text-sm text-zinc-600 dark:text-zinc-400">-</td>
-                          <td className="px-4 py-3">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => viewDocument(doc)}
-                                disabled={previewLoading}
-                                className="rounded px-2 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-100 disabled:opacity-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                              >
-                                View
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => addToShareSelectionAndOpenInvestors(doc)}
-                                className="rounded px-2 py-1 text-xs font-medium text-blue-600 transition hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/20"
-                              >
-                                Share
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDelete(doc.path)}
-                                className="rounded px-2 py-1 text-xs font-medium text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                <DocumentsTable
+                  documents={documents}
+                  onShare={(doc) => setShareTarget(doc)}
+                  onDelete={(doc) => void handleDelete(doc)}
+                />
+              </div>
             </div>
           )}
 
           {activeTab === "investors" && (
             <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-              <h2 className="mb-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Share with an investor</h2>
+              <h2 className="mb-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Share with investors</h2>
               <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-                Choose which files to include, then enter the investor&apos;s email. Selected files are listed in the notification.
+                Open the Documents tab, then use <strong>Share</strong> on a row to invite an investor by email. They
+                receive a secure link to sign in and view only what you shared.
               </p>
-              {documents.length === 0 ? (
-                <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                  You have no documents yet. Upload files from the Dashboard or Documents tab, then return here to send them to an investor.
-                </p>
-              ) : (
-                <div className="space-y-4">
-                  <div>
-                    <p className="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">Documents to send</p>
-                    {shareSelectedPaths.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-8 dark:border-zinc-800 dark:bg-zinc-900/50">
-                        <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
-                          No files selected yet. Open Documents to pick one or more files (checkboxes or Share on a row).
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => setActiveTab("documents")}
-                          className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-950"
-                        >
-                          Select documents
-                        </button>
-                      </div>
-                    ) : (
-                      <ul className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
-                        {documents
-                          .filter((d) => shareSelectedPaths.includes(d.path))
-                          .map((doc) => (
-                            <li
-                              key={doc.path}
-                              className="flex items-center justify-between gap-3 px-3 py-2 text-sm dark:bg-zinc-950"
-                            >
-                              <span className="min-w-0 truncate font-medium text-zinc-900 dark:text-zinc-50">{doc.name}</span>
-                              <span className="shrink-0 text-xs text-zinc-500 dark:text-zinc-400">
-                                {getDocumentTypeLabel(doc.name)}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => toggleShareSelection(doc.path)}
-                                className="shrink-0 rounded px-2 py-1 text-xs font-medium text-zinc-600 transition hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800"
-                              >
-                                Remove
-                              </button>
-                            </li>
-                          ))}
-                      </ul>
-                    )}
-                    {shareSelectedPaths.length > 0 && (
-                      <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-                        {shareSelectedPaths.length} file{shareSelectedPaths.length === 1 ? "" : "s"} will be listed in the email.
-                      </p>
-                    )}
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">Investor email</label>
-                    <input
-                      type="email"
-                      value={shareEmail}
-                      onChange={(e) => setShareEmail(e.target.value)}
-                      placeholder="investor@example.com"
-                      className="block w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 shadow-sm outline-none ring-0 placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-200 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-50 dark:placeholder:text-zinc-500 dark:focus:border-zinc-600 dark:focus:ring-zinc-800"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleShare}
-                    disabled={sharing || !shareEmail.trim() || shareSelectedPaths.length === 0}
-                    className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-zinc-400"
-                  >
-                    {sharing ? "Sending…" : shareSelectedPaths.length <= 1 ? "Send to investor" : `Send ${shareSelectedPaths.length} documents`}
-                  </button>
-                </div>
-              )}
+              <button
+                type="button"
+                onClick={() => setActiveTab("documents")}
+                className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700"
+              >
+                Go to Documents
+              </button>
             </div>
           )}
 
@@ -695,12 +465,32 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                 {activities.length === 0 ? (
                   <p className="text-sm text-zinc-500 dark:text-zinc-400">No activity yet</p>
                 ) : (
-                  activities.map((activity) => (
-                    <div key={activity.id} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
-                      <p className="text-sm text-zinc-900 dark:text-zinc-50"><span className="font-medium">You</span> {activity.action} <span className="font-medium">{activity.document}</span></p>
-                      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{formatDate(activity.timestamp)}</p>
-                    </div>
-                  ))
+                  activities.map((activity) => {
+                    const meta = activity.meta;
+                    const docTitle =
+                      meta &&
+                      typeof meta === "object" &&
+                      "document_title" in meta &&
+                      typeof (meta as { document_title?: unknown }).document_title === "string"
+                        ? (meta as { document_title: string }).document_title
+                        : null;
+                    return (
+                      <div key={activity.id} className="rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+                        <p className="text-sm text-zinc-900 dark:text-zinc-50">
+                          <span className="font-medium">You</span> {activity.action}
+                          {docTitle ? (
+                            <>
+                              {" "}
+                              <span className="font-medium">{docTitle}</span>
+                            </>
+                          ) : null}
+                        </p>
+                        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                          {formatDate(activity.created_at)}
+                        </p>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -720,39 +510,13 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
         </div>
       </main>
 
-      {preview && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="doc-preview-title"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setPreview(null);
-          }}
-        >
-          <div className="relative flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
-            <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-              <p id="doc-preview-title" className="truncate pr-4 text-sm font-medium text-zinc-900 dark:text-zinc-50">
-                {preview.name}
-              </p>
-              <button
-                type="button"
-                onClick={() => setPreview(null)}
-                className="shrink-0 rounded-lg px-3 py-1.5 text-sm font-medium text-zinc-600 transition hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-              >
-                Close
-              </button>
-            </div>
-            <div className="min-h-0 flex-1 overflow-auto bg-zinc-100 dark:bg-zinc-900">
-              {preview.category === "image" ? (
-                <img src={preview.url} alt={preview.name} className="mx-auto max-h-[80vh] w-auto max-w-full object-contain" />
-              ) : (
-                <iframe title={preview.name} src={preview.url} className="h-[min(80vh,720px)] w-full border-0 bg-white" />
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      <ShareDocumentModal
+        open={shareTarget !== null}
+        documentId={shareTarget?.id ?? ""}
+        documentTitle={shareTarget?.title ?? ""}
+        onClose={() => setShareTarget(null)}
+        onShared={() => void refreshAfterShare()}
+      />
     </div>
   );
 }
