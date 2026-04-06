@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabaseClient";
+import SettingsPanel from "./SettingsPanel";
 
 interface Document {
   name: string;
@@ -704,10 +705,15 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
             </div>
           )}
 
-          {activeTab === "settings" && (
-            <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-              <h2 className="mb-4 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Settings</h2>
-              <p className="text-sm text-zinc-500 dark:text-zinc-400">Settings coming soon...</p>
+          {activeTab === "settings" && user && (
+            <div>
+              <div className="mb-4">
+                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Settings</h2>
+                <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                  Account, security, and data room preferences.
+                </p>
+              </div>
+              <SettingsPanel user={user} onUserUpdated={setUser} />
             </div>
           )}
         </div>
