@@ -612,7 +612,7 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
             <div className="rounded-xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
               <h2 className="mb-1 text-lg font-semibold text-zinc-900 dark:text-zinc-50">Share with an investor</h2>
               <p className="mb-4 text-sm text-zinc-500 dark:text-zinc-400">
-                Select one or more files using the checkboxes on the Documents tab (or use Share on a row), then enter the investor&apos;s email. All selected files are listed in the notification email.
+                Choose which files to include, then enter the investor&apos;s email. Selected files are listed in the notification.
               </p>
               {documents.length === 0 ? (
                 <p className="text-sm text-zinc-500 dark:text-zinc-400">
@@ -623,16 +623,17 @@ export default function DashboardClient({ initialUser = null }: DashboardClientP
                   <div>
                     <p className="mb-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">Documents to send</p>
                     {shareSelectedPaths.length === 0 ? (
-                      <div className="rounded-lg border border-dashed border-zinc-300 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-500 dark:border-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
-                        No files selected. Go to{" "}
+                      <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-8 dark:border-zinc-800 dark:bg-zinc-900/50">
+                        <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
+                          No files selected yet. Open Documents to pick one or more files (checkboxes or Share on a row).
+                        </p>
                         <button
                           type="button"
                           onClick={() => setActiveTab("documents")}
-                          className="font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
+                          className="rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-950"
                         >
-                          Documents
-                        </button>{" "}
-                        and tick the files you want to include (or click Share on a row).
+                          Select documents
+                        </button>
                       </div>
                     ) : (
                       <ul className="divide-y divide-zinc-200 rounded-lg border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
