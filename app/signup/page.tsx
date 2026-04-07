@@ -117,9 +117,19 @@ export default function SignupPage() {
             <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
           )}
           {message && (
-            <p className="text-sm text-emerald-600 dark:text-emerald-400">
-              {message}
-            </p>
+            <div className="space-y-2 text-sm text-emerald-600 dark:text-emerald-400">
+              <p>{message}</p>
+              <p>
+                If the link in the email shows an error, use the{" "}
+                <Link
+                  href="/auth/confirm"
+                  className="font-medium underline underline-offset-2 hover:text-emerald-700 dark:hover:text-emerald-300"
+                >
+                  6-digit code
+                </Link>{" "}
+                from the same email instead.
+              </p>
+            </div>
           )}
 
           <button

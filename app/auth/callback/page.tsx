@@ -23,6 +23,21 @@ export default function AuthCallbackPage() {
       const accessToken = hashParams.get("access_token");
       const refreshToken = hashParams.get("refresh_token");
 
+      const errorCode =
+        url.searchParams.get("error_code") ??
+        hashParams.get("error_code") ??
+        url.searchParams.get("error") ??
+        hashParams.get("error");
+      const hasGrant = Boolean(code) || Boolean(accessToken && refreshToken);
+      if (!hasGrant && errorCode) {
+        if (!mounted) return;
+        const params = new URLSearchParams();
+        params.set("reason", errorCode === "otp_expired" ? "expired" : errorCode);
+        if (next !== "/dashboard") params.set("next", next);
+        router.replace(`/auth/confirm?${params.toString()}`);
+        return;
+      }
+
       if (code) {
         await supabase.auth.exchangeCodeForSession(code);
       } else if (accessToken && refreshToken) {

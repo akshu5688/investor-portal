@@ -1,12 +1,13 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { FormEvent, Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   getEmailConfirmationRedirectTo,
   getPasswordResetRedirectTo,
 } from "@/lib/authRedirect";
+import { getSafeNextPath } from "@/lib/safe-next-path";
 import { supabase } from "@/lib/supabaseClient";
 
 function getSupabaseSetupWarning(): string | null {
@@ -26,7 +27,6 @@ function getSupabaseSetupWarning(): string | null {
     return "Supabase URL is invalid. Update NEXT_PUBLIC_SUPABASE_URL in .env.local and restart the dev server.";
   }
 
-  // Supabase anon keys are JWTs and should have 3 dot-separated sections.
   if (anonKey.split(".").length !== 3) {
     return "Supabase anon key format looks invalid. Update NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local and restart the dev server.";
   }
@@ -51,8 +51,9 @@ function normalizeAuthErrorMessage(message: string): string {
   return message;
 }
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const setupWarning = getSupabaseSetupWarning();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -86,7 +87,9 @@ export default function LoginPage() {
         return;
       }
 
-      router.push("/dashboard");
+      const nextRaw = searchParams.get("next");
+      const next = getSafeNextPath(nextRaw);
+      router.push(next);
     } catch (err) {
       const fallbackMessage = err instanceof Error ? err.message : "Login failed.";
       setError(normalizeAuthErrorMessage(fallbackMessage));
@@ -112,10 +115,9 @@ export default function LoginPage() {
 
     setResetSending(true);
     try {
-      const { error: resetError } = await supabase.auth.resetPasswordForEmail(
-        addr,
-        { redirectTo: getPasswordResetRedirectTo() }
-      );
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(addr, {
+        redirectTo: getPasswordResetRedirectTo(),
+      });
 
       if (resetError) {
         setError(normalizeAuthErrorMessage(resetError.message));
@@ -167,7 +169,8 @@ export default function LoginPage() {
 
       setInfo("Confirmation email sent. Please check your inbox.");
     } catch (err) {
-      const fallbackMessage = err instanceof Error ? err.message : "Failed to resend confirmation email.";
+      const fallbackMessage =
+        err instanceof Error ? err.message : "Failed to resend confirmation email.";
       setError(normalizeAuthErrorMessage(fallbackMessage));
     } finally {
       setResending(false);
@@ -235,8 +238,7 @@ export default function LoginPage() {
             {showForgotPassword && (
               <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900/50">
                 <p className="mb-2 text-xs text-zinc-600 dark:text-zinc-400">
-                  We&apos;ll email you a link to set a new password. Use the same email
-                  as your account.
+                  We&apos;ll email you a link to set a new password. Use the same email as your account.
                 </p>
                 <button
                   type="button"
@@ -278,6 +280,16 @@ export default function LoginPage() {
           >
             {resending ? "Sending confirmation email..." : "Resend confirmation email"}
           </button>
+
+          <p className="mt-3 text-center text-xs text-zinc-500 dark:text-zinc-400">
+            Link broken or expired?{" "}
+            <Link
+              href="/auth/confirm"
+              className="font-medium text-zinc-700 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+            >
+              Confirm with 6-digit code
+            </Link>
+          </p>
         </form>
 
         <p className="mt-4 text-center text-sm text-zinc-500 dark:text-zinc-400">
@@ -294,3 +306,21 @@ export default function LoginPage() {
   );
 }
 
+function LoginFallback() {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-black">
+      <div className="text-center">
+        <div className="mb-4 h-8 w-8 animate-spin rounded-full border-4 border-zinc-200 border-t-zinc-900 dark:border-zinc-800 dark:border-t-zinc-50" />
+        <p className="text-sm text-zinc-600 dark:text-zinc-300">Loading…</p>
+      </div>
+    </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginFallback />}>
+      <LoginForm />
+    </Suspense>
+  );
+}
